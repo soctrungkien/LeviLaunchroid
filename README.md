@@ -1,3 +1,5 @@
+## This fork has removed the install source verification feature to enhance security.
+
 <div align="center">
 
 ![LeviLauncher Logo](https://avatars.githubusercontent.com/u/78095377?s=200&v=4)
