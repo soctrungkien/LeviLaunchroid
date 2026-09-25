@@ -169,7 +169,7 @@ import okhttp3.OkHttpClient;
         setupNavBar();
         setupManagersAndHandlers();
         if (!isInstanceShortcutIntent()) {
-            new GithubReleaseUpdater(this, "LiteLDev", "LeviLaunchroid", permissionResultLauncher).checkUpdateOnLaunch();
+            new GithubReleaseUpdater(this, "soctrungkien", "LeviLaunchroid", permissionResultLauncher).checkUpdateOnLaunch();
         }
         showEulaIfNeeded();
         setupOnBackPressedCallback();
