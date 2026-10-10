@@ -2,6 +2,7 @@ package org.levimc.launcher.core.mods.inbuilt.overlay;
 
 import android.app.Activity;
 import android.view.MotionEvent;
+import android.view.KeyEvent;
 
 import org.levimc.launcher.core.mods.inbuilt.ExternalModBridge;
 import org.levimc.launcher.core.mods.inbuilt.manager.InbuiltModManager;
@@ -9,6 +10,7 @@ import org.levimc.launcher.core.mods.inbuilt.manager.MoreButtonsManager;
 import org.levimc.launcher.core.mods.inbuilt.model.MoreButtonConfig;
 import org.levimc.launcher.core.mods.inbuilt.model.ModIds;
 import org.levimc.launcher.core.mods.inbuilt.nativemod.PojavControlsMod;
+import org.levimc.launcher.core.mods.inbuilt.nativemod.HotbarSlotMod;
 import org.levimc.pojavcontrols.PojavControls;
 import org.levimc.pojavcontrols.PojavControlsHost;
 
@@ -25,11 +27,23 @@ public class InbuiltOverlayManager {
     private static volatile InbuiltOverlayManager instance;
     private final Activity activity;
     private final List<BaseOverlayButton> overlays = new ArrayList<>();
+    private static final String[] KEYBIND_MOD_IDS = {
+            ModIds.QUICK_DROP, ModIds.CAMERA_PERSPECTIVE, ModIds.TOGGLE_HUD,
+            ModIds.AUTO_SPRINT, ModIds.ZOOM, ModIds.FPS_DISPLAY, ModIds.CPS_DISPLAY,
+            ModIds.SNAPLOOK, ModIds.VIRTUAL_CURSOR, ModIds.GYRO,
+            ModIds.POJAV_CONTROLS, ModIds.HOTBAR_SLOT
+    };
     private final Map<String, Boolean> modActiveStates = new HashMap<>();
+    private final Map<String, BaseOverlayButton> keybindControllers = new HashMap<>();
+    private final Map<Integer, List<String>> pressedKeybinds = new HashMap<>();
+    private volatile boolean hasPressedKeybinds;
+    private int modMenuShortcutHeld = KeyEvent.KEYCODE_UNKNOWN;
     private final Map<String, BaseOverlayButton> modOverlayMap = new HashMap<>();
     private final Map<String, ExternalButtonOverlay> externalButtonOverlayMap = new HashMap<>();
     private final Map<String, MoreButtonOverlay> moreButtonOverlayMap = new HashMap<>();
     private final Map<Integer, HotbarSlotOverlay> hotbarSlotOverlayMap = new HashMap<>();
+    private final int[] hotbarItemCounts = new int[9];
+    private volatile boolean hotbarTrackingEnabled;
     private boolean moreButtonsEditorOpen;
     private final Map<String, Integer> modPositionMap = new HashMap<>();
     private ChickPetOverlay chickPetOverlay;
@@ -84,9 +98,16 @@ public class InbuiltOverlayManager {
         if (!manager.isModMenuEnabled()) return;
         activity.runOnUiThread(() -> {
             if (activity.isFinishing() || activity.isDestroyed()) return;
+            releaseKeybinds();
             modMenuOpenedFromButton = false;
             getOrCreateModMenuOverlay().show();
         });
+    }
+
+    public void openPojavControlsEditor() {
+        releaseKeybinds();
+        hideModMenu();
+        PojavControls.launchEditor(activity);
     }
 
     public void hideModMenu() {
@@ -114,6 +135,7 @@ public class InbuiltOverlayManager {
                 modMenuOpenedFromButton = false;
                 overlay.hide();
             } else {
+                releaseKeybinds();
                 modMenuOpenedFromButton = true;
                 overlay.show();
             }
@@ -204,9 +226,45 @@ public class InbuiltOverlayManager {
         
         if (enabled && !wasEnabled) {
             showModOverlay(modId);
-        } else if (!enabled && wasEnabled) {
-            hideModOverlay(modId);
+        } else if (!enabled) {
+            releaseModKeybind(modId);
+            if (wasEnabled) hideModOverlay(modId);
+            else {
+                BaseOverlayButton controller = keybindControllers.get(modId);
+                if (controller != null) controller.hide();
+            }
         }
+    }
+
+    private BaseOverlayButton getKeybindController(String modId) {
+        BaseOverlayButton controller = modOverlayMap.get(modId);
+        if (controller == null) controller = keybindControllers.get(modId);
+        if (controller != null) {
+            keybindControllers.put(modId, controller);
+            return controller;
+        }
+        switch (modId) {
+            case ModIds.QUICK_DROP: controller = new QuickDropOverlay(activity); break;
+            case ModIds.CAMERA_PERSPECTIVE: controller = new CameraPerspectiveOverlay(activity); break;
+            case ModIds.TOGGLE_HUD: controller = new ToggleHudOverlay(activity); break;
+            case ModIds.AUTO_SPRINT: controller = new AutoSprintOverlay(activity); break;
+            case ModIds.VIRTUAL_CURSOR: controller = new VirtualCursorOverlay(activity); break;
+            case ModIds.ZOOM:
+                if (zoomOverlay == null) zoomOverlay = new ZoomOverlay(activity);
+                controller = zoomOverlay;
+                break;
+            case ModIds.SNAPLOOK:
+                if (snaplookOverlay == null) snaplookOverlay = new SnaplookOverlay(activity);
+                controller = snaplookOverlay;
+                break;
+            case ModIds.GYRO:
+                if (gyroOverlay == null) gyroOverlay = new GyroOverlay(activity);
+                controller = gyroOverlay;
+                break;
+            default: return null;
+        }
+        keybindControllers.put(modId, controller);
+        return controller;
     }
 
     private void showModOverlay(String modId) {
@@ -225,25 +283,25 @@ public class InbuiltOverlayManager {
 
         switch (modId) {
             case ModIds.QUICK_DROP:
-                QuickDropOverlay quickDrop = new QuickDropOverlay(activity);
+                QuickDropOverlay quickDrop = (QuickDropOverlay) getKeybindController(ModIds.QUICK_DROP);
                 quickDrop.show(savedX, savedY);
                 overlays.add(quickDrop);
                 modOverlayMap.put(modId, quickDrop);
                 break;
             case ModIds.CAMERA_PERSPECTIVE:
-                CameraPerspectiveOverlay camera = new CameraPerspectiveOverlay(activity);
+                CameraPerspectiveOverlay camera = (CameraPerspectiveOverlay) getKeybindController(ModIds.CAMERA_PERSPECTIVE);
                 camera.show(savedX, savedY);
                 overlays.add(camera);
                 modOverlayMap.put(modId, camera);
                 break;
             case ModIds.TOGGLE_HUD:
-                ToggleHudOverlay hud = new ToggleHudOverlay(activity);
+                ToggleHudOverlay hud = (ToggleHudOverlay) getKeybindController(ModIds.TOGGLE_HUD);
                 hud.show(savedX, savedY);
                 overlays.add(hud);
                 modOverlayMap.put(modId, hud);
                 break;
             case ModIds.AUTO_SPRINT:
-                AutoSprintOverlay sprint = new AutoSprintOverlay(activity);
+                AutoSprintOverlay sprint = (AutoSprintOverlay) getKeybindController(ModIds.AUTO_SPRINT);
                 sprint.show(savedX, savedY);
                 overlays.add(sprint);
                 modOverlayMap.put(modId, sprint);
@@ -255,9 +313,7 @@ public class InbuiltOverlayManager {
                 }
                 break;
             case ModIds.ZOOM:
-                if (zoomOverlay == null) {
-                    zoomOverlay = new ZoomOverlay(activity);
-                }
+                zoomOverlay = (ZoomOverlay) getKeybindController(ModIds.ZOOM);
                 zoomOverlay.show(savedX, savedY);
                 overlays.add(zoomOverlay);
                 modOverlayMap.put(modId, zoomOverlay);
@@ -275,23 +331,19 @@ public class InbuiltOverlayManager {
                 }
                 break;
             case ModIds.SNAPLOOK:
-                if (snaplookOverlay == null) {
-                    snaplookOverlay = new SnaplookOverlay(activity);
-                }
+                snaplookOverlay = (SnaplookOverlay) getKeybindController(ModIds.SNAPLOOK);
                 snaplookOverlay.show(savedX, savedY);
                 overlays.add(snaplookOverlay);
                 modOverlayMap.put(modId, snaplookOverlay);
                 break;
             case ModIds.VIRTUAL_CURSOR:
-                VirtualCursorOverlay cursorOverlay = new VirtualCursorOverlay(activity);
+                VirtualCursorOverlay cursorOverlay = (VirtualCursorOverlay) getKeybindController(ModIds.VIRTUAL_CURSOR);
                 cursorOverlay.show(savedX, savedY);
                 overlays.add(cursorOverlay);
                 modOverlayMap.put(modId, cursorOverlay);
                 break;
             case ModIds.GYRO:
-                if (gyroOverlay == null) {
-                    gyroOverlay = new GyroOverlay(activity);
-                }
+                gyroOverlay = (GyroOverlay) getKeybindController(ModIds.GYRO);
                 gyroOverlay.show(savedX, savedY);
                 overlays.add(gyroOverlay);
                 modOverlayMap.put(modId, gyroOverlay);
@@ -444,7 +496,10 @@ public class InbuiltOverlayManager {
     public void setMoreButtonsEditorOpen(boolean open) {
         if (moreButtonsEditorOpen == open) return;
         moreButtonsEditorOpen = open;
-        if (open) hideMoreButtons();
+        if (open) {
+            releaseKeybinds();
+            hideMoreButtons();
+        }
         else refreshMoreButtons();
     }
 
@@ -499,6 +554,11 @@ public class InbuiltOverlayManager {
             }
             nextX += button + gap;
         }
+        hotbarTrackingEnabled = !hotbarSlotOverlayMap.isEmpty() &&
+                (manager.isHotbarItemIconsEnabled() || manager.isHotbarItemCountsEnabled());
+        HotbarSlotMod.setOverlayEnabled(!hotbarSlotOverlayMap.isEmpty());
+        HotbarSlotMod.setItemIconsEnabled(hotbarTrackingEnabled && manager.isHotbarItemIconsEnabled());
+        HotbarSlotMod.setEnabled(hotbarTrackingEnabled);
     }
 
     private int getHotbarSlotButtonSizePx(InbuiltModManager manager,
@@ -517,6 +577,10 @@ public class InbuiltOverlayManager {
     }
 
     private void hideHotbarSlots() {
+        HotbarSlotMod.setOverlayEnabled(false);
+        hotbarTrackingEnabled = false;
+        HotbarSlotMod.setEnabled(false);
+        HotbarSlotMod.setItemIconsEnabled(false);
         java.util.List<HotbarSlotOverlay> copy = new java.util.ArrayList<>(hotbarSlotOverlayMap.values());
         for (HotbarSlotOverlay overlay : copy) removeHotbarSlotOverlay(overlay);
         hotbarSlotOverlayMap.clear();
@@ -620,6 +684,14 @@ public class InbuiltOverlayManager {
 
 
     public void hideAllOverlays() {
+        releaseModMenuShortcut();
+        releaseKeybinds();
+        for (BaseOverlayButton controller : keybindControllers.values()) controller.hide();
+        keybindControllers.clear();
+        HotbarSlotMod.setOverlayEnabled(false);
+        hotbarTrackingEnabled = false;
+        HotbarSlotMod.setEnabled(false);
+        HotbarSlotMod.setItemIconsEnabled(false);
         PojavControls.setEnabled(activity,
                 activity instanceof PojavControlsHost ? (PojavControlsHost) activity : null,
                 false);
@@ -675,39 +747,105 @@ public class InbuiltOverlayManager {
         instance = null;
     }
 
-    public boolean handleKeyEvent(int keyCode, int action) {
+    public boolean handleModMenuShortcut(KeyEvent event) {
+        int keyCode = event.getKeyCode();
+        int action = event.getAction();
+        if (keyCode == modMenuShortcutHeld) {
+            if (action == KeyEvent.ACTION_UP) {
+                modMenuShortcutHeld = KeyEvent.KEYCODE_UNKNOWN;
+            }
+            return action == KeyEvent.ACTION_DOWN || action == KeyEvent.ACTION_UP;
+        }
+        if (action != KeyEvent.ACTION_DOWN || event.getRepeatCount() != 0
+                || (!event.hasNoModifiers() && !KeyEvent.isModifierKey(keyCode))) return false;
         InbuiltModManager manager = InbuiltModManager.getInstance(activity);
-        
-        boolean zoomEnabled = modActiveStates.getOrDefault(ModIds.ZOOM, false);
-        
-        int zoomKeybind = manager.getZoomKeybind();
-        if (zoomEnabled && keyCode == zoomKeybind) {
-            if (zoomOverlay != null) {
-                if (action == android.view.KeyEvent.ACTION_DOWN) {
-                    zoomOverlay.onKeyDown();
-                    return true;
-                } else if (action == android.view.KeyEvent.ACTION_UP) {
-                    zoomOverlay.onKeyUp();
-                    return true;
-                }
-            }
+        if (!manager.isModMenuEnabled() || keyCode == KeyEvent.KEYCODE_UNKNOWN
+                || keyCode != manager.getModMenuKeybind() || moreButtonsEditorOpen
+                || PojavControls.isEditorOpen()) return false;
+        if (manager.isPauseMenuOnly() && !isModMenuShowing()
+                && !org.levimc.launcher.preloader.PreloaderInput.isPauseMenuOpen()) return false;
+        modMenuShortcutHeld = keyCode;
+        toggleModMenuFromButton();
+        return true;
+    }
+
+    public void releaseModMenuShortcut() {
+        modMenuShortcutHeld = KeyEvent.KEYCODE_UNKNOWN;
+    }
+
+    public boolean handleKeyEvent(KeyEvent event) {
+        int keyCode = event.getKeyCode();
+        int action = event.getAction();
+        if (action == KeyEvent.ACTION_UP) {
+            List<String> mods = pressedKeybinds.remove(keyCode);
+            hasPressedKeybinds = !pressedKeybinds.isEmpty();
+            if (mods == null) return false;
+            for (String modId : mods) releaseKeybindAction(modId);
+            return true;
         }
-
-        boolean snaplookEnabled = modActiveStates.getOrDefault(ModIds.SNAPLOOK, false);
-
-        if (snaplookEnabled && keyCode == android.view.KeyEvent.KEYCODE_X) {
-            if (snaplookOverlay != null) {
-                if (action == android.view.KeyEvent.ACTION_DOWN) {
-                    snaplookOverlay.onKeyDown();
-                    return true;
-                } else if (action == android.view.KeyEvent.ACTION_UP) {
-                    snaplookOverlay.onKeyUp();
-                    return true;
-                }
-            }
+        if (action != KeyEvent.ACTION_DOWN || keyCode == KeyEvent.KEYCODE_UNKNOWN) return false;
+        if (pressedKeybinds.containsKey(keyCode)) return true;
+        if (event.getRepeatCount() != 0 || hudEditorMode || isModMenuShowing()
+                || moreButtonsEditorOpen || PojavControls.isEditorOpen()
+                || org.levimc.launcher.preloader.PreloaderInput.isShowingMenu()
+                || org.levimc.launcher.preloader.PreloaderInput.isPauseMenuOpen()
+                || !org.levimc.launcher.preloader.PreloaderInput.isHudScreenOpen()) return false;
+        InbuiltModManager manager = InbuiltModManager.getInstance(activity);
+        List<String> matches = new ArrayList<>();
+        for (String modId : KEYBIND_MOD_IDS) {
+            if (manager.getInbuiltModKeybind(modId) == keyCode) matches.add(modId);
         }
+        if (matches.isEmpty()) return false;
+        pressedKeybinds.put(keyCode, new ArrayList<>(matches));
+        hasPressedKeybinds = true;
+        for (String modId : matches) activateKeybindAction(modId);
+        return true;
+    }
 
-        return false;
+    private void activateKeybindAction(String modId) {
+        if (ModIds.FPS_DISPLAY.equals(modId) || ModIds.CPS_DISPLAY.equals(modId)
+                || ModIds.HOTBAR_SLOT.equals(modId) || ModIds.POJAV_CONTROLS.equals(modId)) {
+            boolean enabled = !isModActive(modId);
+            InbuiltModManager.getInstance(activity).setInbuiltModEnabled(modId, enabled);
+            handleModToggle(modId, enabled);
+            refreshRuntimeVisibility();
+            return;
+        }
+        BaseOverlayButton controller = getKeybindController(modId);
+        if (controller == null) return;
+        switch (modId) {
+            case ModIds.ZOOM: ((ZoomOverlay) controller).onKeyDown(); break;
+            case ModIds.SNAPLOOK: ((SnaplookOverlay) controller).onKeyDown(); break;
+            case ModIds.QUICK_DROP: controller.onButtonPressStart(); break;
+            case ModIds.GYRO: ((GyroOverlay) controller).toggleGyro(); break;
+            default: controller.onButtonClick(); break;
+        }
+    }
+
+    private void releaseKeybindAction(String modId) {
+        BaseOverlayButton controller = keybindControllers.get(modId);
+        if (controller == null) return;
+        switch (modId) {
+            case ModIds.ZOOM: ((ZoomOverlay) controller).onKeyUp(); break;
+            case ModIds.SNAPLOOK: ((SnaplookOverlay) controller).onKeyUp(); break;
+            case ModIds.QUICK_DROP: controller.onButtonPressEnd(); break;
+            default: break;
+        }
+    }
+
+    private void releaseModKeybind(String modId) {
+        for (List<String> mods : pressedKeybinds.values()) {
+            if (mods.remove(modId)) releaseKeybindAction(modId);
+        }
+    }
+
+    public void releaseKeybinds() {
+        List<List<String>> pressed = new ArrayList<>(pressedKeybinds.values());
+        pressedKeybinds.clear();
+        hasPressedKeybinds = false;
+        for (List<String> mods : pressed) {
+            for (String modId : mods) releaseKeybindAction(modId);
+        }
     }
 
     public boolean handleScrollEvent(float scrollDelta) {
@@ -743,6 +881,9 @@ public class InbuiltOverlayManager {
             overlay.applyConfigurationChanges();
         }
 
+        BaseOverlayButton controller = keybindControllers.get(modId);
+        if (controller != null && controller != overlay) controller.applyConfigurationChanges();
+
         if (modId.equals(ModIds.ZOOM) && zoomOverlay != null) {
             zoomOverlay.applyConfigurationChanges();
         }
@@ -767,6 +908,7 @@ public class InbuiltOverlayManager {
     }
 
     public void setHudEditorMode(boolean active) {
+        if (active) releaseKeybinds();
         hudEditorMode = active;
         for (BaseOverlayButton overlay : overlays) {
             overlay.setHudEditorMode(active);
@@ -967,8 +1109,20 @@ public class InbuiltOverlayManager {
         boolean isShowingMenu = org.levimc.launcher.preloader.PreloaderInput.isShowingMenu();
         boolean isFloatingModMenuButtonHidden = ExternalModBridge.isFloatingModMenuButtonHidden();
         boolean showGameOverlays = isHudScreenOpen && !isShowingMenu && !isPauseOpen;
+        if (!showGameOverlays && hasPressedKeybinds) activity.runOnUiThread(this::releaseKeybinds);
         boolean inbuiltVisible = hudEditorMode || showGameOverlays;
-        boolean hotbarVisible = inbuiltVisible || manager.isOverlayShowEverywhere(ModIds.HOTBAR_SLOT);
+        int hotbarGameplayState = HotbarSlotMod.getGameplayVisibilityState();
+        boolean hotbarGameplayVisible = hotbarGameplayState >= 0
+                ? hotbarGameplayState == 1 : showGameOverlays;
+        boolean hotbarVisible = hudEditorMode || hotbarGameplayVisible ||
+                manager.isOverlayShowEverywhere(ModIds.HOTBAR_SLOT);
+
+        if (hotbarTrackingEnabled && hotbarVisible && !hotbarSlotOverlayMap.isEmpty()) {
+            HotbarSlotMod.copyItemCounts(hotbarItemCounts);
+            for (HotbarSlotOverlay hotbar : hotbarSlotOverlayMap.values()) {
+                hotbar.updateItemCount(hotbarItemCounts[hotbar.getSlot() - 1]);
+            }
+        }
 
         for (BaseOverlayButton overlay : overlays) {
             if (inbuiltVisible || manager.isOverlayShowEverywhere(overlay.getOverlayConfigKey())) {
@@ -986,6 +1140,7 @@ public class InbuiltOverlayManager {
         stateHash = 31L * stateHash + (isShowingMenu ? 1L : 0L);
         stateHash = 31L * stateHash + (isFloatingModMenuButtonHidden ? 1L : 0L);
         stateHash = 31L * stateHash + (hudEditorMode ? 1L : 0L);
+        stateHash = 31L * stateHash + (hotbarVisible ? 1L : 0L);
         stateHash = 31L * stateHash + overlays.size();
         for (BaseOverlayButton overlay : overlays) {
             stateHash = 31L * stateHash + System.identityHashCode(overlay);
@@ -1022,7 +1177,9 @@ public class InbuiltOverlayManager {
 
             for (BaseOverlayButton overlay : overlays) {
                 if (overlay.overlayView != null) {
-                    int visibility = inbuiltVisible || manager.isOverlayShowEverywhere(overlay.getOverlayConfigKey())
+                    boolean visible = overlay instanceof HotbarSlotOverlay ? hotbarVisible :
+                            inbuiltVisible || manager.isOverlayShowEverywhere(overlay.getOverlayConfigKey());
+                    int visibility = visible
                             ? android.view.View.VISIBLE
                             : android.view.View.GONE;
                     if (overlay.overlayView.getVisibility() != visibility) {
